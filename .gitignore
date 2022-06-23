@@ -1,3 +1,5 @@
+results
+record/rl-baselines3-zoo
 *.idea
 *.npz
 *.mp4
