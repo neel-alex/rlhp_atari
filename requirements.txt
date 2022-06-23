@@ -1,0 +1,11 @@
+numpy
+torch
+gym[atari]
+gym[accept-rom-license]
+pyglet # for rendering
+ale-py=0.7.4 # tmp fix: until new SB3 version is released
+stable_baselines3
+opencv-python
+sacred
+
+pynput
