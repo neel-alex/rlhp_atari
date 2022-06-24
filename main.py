@@ -8,7 +8,7 @@ from stable_baselines3.dqn import DQN
 from sacred import Experiment, observers
 
 from dqfp import train_policy, test_policy
-from utils import make_atari_env, ExpertDataSet
+from utils import make_atari_env, ExpertDataSet, DuelingDQNPolicy
 
 dqfp_experiment = Experiment("dqfp")
 observer = observers.FileStorageObserver('results/dqfp')
@@ -17,13 +17,13 @@ dqfp_experiment.observers.append(observer)
 
 @dqfp_experiment.config
 def config():
-    env_id = "EnduroNoFrameskip-v4"
+    env_id = "QbertNoFrameskip-v4"
     device = "cuda"
     dataloader_kwargs = {"num_workers": 1, "pin_memory": True}
 
     scheduler_gamma = 1.0
     learning_rate = 1e-3
-    epochs = 20
+    epochs = 5
     batch_size = 32
     th.manual_seed(4)
 
@@ -31,7 +31,7 @@ def config():
 @dqfp_experiment.automain
 def main(env_id, device, dataloader_kwargs, scheduler_gamma, learning_rate, epochs, batch_size):
     env = make_atari_env(env_id)
-    model = DQN("CnnPolicy", env, verbose=1)
+    model = DQN(DuelingDQNPolicy, env, verbose=1)
     data = np.load(f"record/{env_id}_expert_data.npz")
     dataset = ExpertDataSet(data['states'],
                             data['actions'],
