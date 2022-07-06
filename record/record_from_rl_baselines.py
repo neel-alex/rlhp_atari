@@ -38,7 +38,7 @@ model = model_class.load(model_path, env=env, custom_objects=custom_objects, dev
 obs = env.reset()
 deterministic = False
 
-num_frames = 40000
+num_frames = 5000
 
 states = np.zeros((num_frames + 1,) + env.observation_space.shape)
 actions = np.zeros((num_frames,) + env.action_space.shape)
@@ -73,7 +73,7 @@ print(states.shape,
       dones.shape)
 
 np.savez_compressed(
-    f"{env_id}_expert_data",
+    f"{env_id}_expert_data{'_mini' if num_frames < 40000 else ''}",
     states=states,
     actions=actions,
     rewards=rewards,

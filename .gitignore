@@ -1,5 +1,6 @@
 results
 record/rl-baselines3-zoo
+record/*.png
 __pycache__
 *.idea
 *.npz
