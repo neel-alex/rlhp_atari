@@ -8,3 +8,8 @@ stable_baselines3
 opencv-python
 sacred
 matplotlib
+
+wandb # not a fan but needed for Usman's RLHP...
+scipy
+nvidia-ml-py3 # really not a fan of this, what the heck does this do?
+mujoco-py # just for testing RLHP
