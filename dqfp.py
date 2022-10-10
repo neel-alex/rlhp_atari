@@ -5,6 +5,7 @@ from torch.optim.lr_scheduler import StepLR
 
 # TODO: use reward model instead of environment rewards...
 def large_margin_loss(action_qs, target_action, margin=1.0):
+    # print(action_qs, action_qs.shape, target_action, target_action.shape)
     target_indices = th.reshape(target_action.to(th.int64), target_action.shape + (1,))
     # Get Qs of expert actions
     expert_margin = th.full(action_qs.shape, margin).to("cuda:0")

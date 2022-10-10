@@ -1,9 +1,9 @@
 import numpy as np
 import gym
-from stable_baselines3.dqn import DQN
-from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.atari_wrappers import AtariWrapper
-from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
+from stungle_bungle3.dqn import DQN
+from stungle_bungle3.common.env_util import make_vec_env
+from stungle_bungle3.common.atari_wrappers import AtariWrapper
+from stungle_bungle3.common.vec_env import DummyVecEnv, VecFrameStack
 import cv2
 
 

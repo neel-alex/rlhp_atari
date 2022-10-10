@@ -1,21 +1,263 @@
+from typing import Any, Dict, Optional, Tuple, Type, Union, Callable, NamedTuple
+
+
+import numpy as np
+import torch as th
 from torch import nn
-from stable_baselines3.common.torch_layers import create_mlp
-from stable_baselines3.dqn.policies import QNetwork, CnnPolicy
-from stable_baselines3 import DQN
+from torch.nn import functional as F
+from gym import spaces
+
+
+from stungle_bungle3.common.torch_layers import create_mlp
+from stungle_bungle3.dqn.policies import QNetwork
+from stungle_bungle3 import DQN
+from stungle_bungle3.common.type_aliases import GymEnv, Schedule
+from stungle_bungle3.dqn.policies import CnnPolicy, DQNPolicy
+from stungle_bungle3.common.vec_env import VecNormalize
+
 from pl.stable_baselines3.common.buffers import ReplayBufferWithRM
+
+
+def large_margin_loss(action_qs, target_action, expert_inds=None, margin=0.8, device='cpu'):
+    # Mask out non-expert actions...
+    if expert_inds is None:
+        # Use all of them by default
+        expert_inds = th.ones(target_action.shape[0]).to(device)
+
+    # target_indices = th.reshape(target_action.to(th.int64), target_action.shape + (1,))
+    # Get Qs of expert actions
+    expert_margin = th.full(action_qs.shape, margin).to(device)
+    margins = th.zeros(target_action.shape).to(device)
+    expert_margin = expert_margin.scatter(1, target_action, margins)
+    margin_adjusted_qs = action_qs + expert_margin
+    best_qs, _ = th.max(margin_adjusted_qs, 1)
+
+    expert_qs = th.gather(action_qs, -1, target_action)
+    expert_qs = expert_qs.reshape(best_qs.shape)
+    masked_diffs = expert_inds * (best_qs - expert_qs)
+    return th.mean(masked_diffs)
+
+
+# TODO: figure out why we can't subclass ReplayBufferSamples to increase number of args??
+class ExpertReplayBufferSamples(NamedTuple):
+    observations: th.Tensor
+    actions: th.Tensor
+    next_observations: th.Tensor
+    dones: th.Tensor
+    expert_indices: th.Tensor  # 1 iff the corresponding sample is expert data, 0 otherwise.
+    rewards: th.Tensor
+
+
+class ExpertReplayBuffer(ReplayBufferWithRM):
+    # Get obs, next obs, 3x next obs, expert action...
+    # What else?
+    def __init__(
+        self,
+        buffer_size: int,
+        observation_space: spaces.Space,
+        action_space: spaces.Space,
+        expert_observations: np.ndarray,
+        expert_actions: np.ndarray,
+        expert_rewards: np.ndarray,
+        expert_next_observations: np.ndarray,
+        reward_model: Callable,
+        reward_relabeling: bool,
+        device: Union[th.device, str] = "cpu",
+        n_envs: int = 1,
+        optimize_memory_usage: bool = False,
+    ):
+        """ All expert_{} parameters need to have their length as the first dimension.
+        Just append them to the start of observations?
+        And reset the counter to the start of observations rather than the protected part of the dataset?
+        """
+        if expert_observations is None:
+            self.num_expert = 0
+        else:
+            self.num_expert = expert_observations.shape[0]
+        super().__init__(reward_model,
+                         reward_relabeling,
+                         buffer_size + self.num_expert,
+                         observation_space,
+                         action_space,
+                         device=device,
+                         n_envs=n_envs,
+                         optimize_memory_usage=optimize_memory_usage)
+        # copy in expert data to the start of the buffer
+        if expert_observations is not None:
+            self.observations[:self.num_expert] = expert_observations.reshape((self.num_expert,
+                                                                               *(self.observations.shape[1:])))
+            self.actions[:self.num_expert] = expert_actions.reshape((self.num_expert,
+                                                                    *(self.actions.shape[1:])))
+            self.rewards[:self.num_expert] = expert_rewards.reshape((self.num_expert,
+                                                                    *(self.rewards.shape[1:])))
+            self.next_observations[:self.num_expert] = \
+                expert_next_observations.reshape((self.num_expert, *(self.next_observations.shape[1:])))
+
+        if optimize_memory_usage:
+            raise NotImplementedError("Whoops, we don't memory optimize expert replay buffers. Todo, I guess.")
+
+        self.pos = self.num_expert
+
+    def reset(self) -> None:
+        self.full = False
+        self.pos = self.num_expert
+
+    def add(self,
+            obs: np.ndarray,
+            next_obs: np.ndarray,
+            action: np.ndarray,
+            reward: np.ndarray,
+            done: np.ndarray,
+            *args) -> None:
+        super().add(obs, next_obs, action, reward, done)
+        if self.full and self.pos == 0:
+            # Buffer just looped over to 0, set pos to real start (ignoring expert actions)
+            self.pos = self.num_expert
+
+    def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> ExpertReplayBufferSamples:
+        # Return an extra variable: whether or not a given datapoint is an expert action.
+        next_obs = self._get_next_obs(batch_inds)
+        if self.reward_relabeling:
+            rewards = self._get_rewards(self.observations[batch_inds, 0, :],
+                                        self.actions[batch_inds, 0, :],
+                                        next_obs,
+                                        self.dones[batch_inds])
+        else:
+            if self.last_rm_call > self.pos:
+                reward_inds = list(range(self.last_rm_call, self.buffer_size)) + \
+                              list(range(0, self.pos))
+            else:
+                reward_inds = list(range(self.last_rm_call, self.pos))
+            self.last_rm_call = self.pos
+
+            rewards = self._get_rewards(self.observations[reward_inds, 0, :],
+                                        self.actions[reward_inds, 0, :],
+                                        self._get_next_obs(reward_inds),
+                                        self.dones[reward_inds])
+            self.rewards[reward_inds] = rewards.copy()
+            rewards = self.rewards[batch_inds].copy()
+
+        data = (
+            self._normalize_obs(self.observations[batch_inds, 0, :], env),
+            self.actions[batch_inds, 0, :],
+            self._normalize_obs(next_obs, env),
+            self.dones[batch_inds],
+            th.tensor(batch_inds < self.num_expert, dtype=th.int), # 1 if the datapoint is from an expert trajectory
+            rewards,
+        )
+        r = tuple(map(self.to_torch, data))
+        return ExpertReplayBufferSamples(*r)
+
 
 
 class ExpertMarginDQN(DQN):
     # Use margin loss + n_step q loss...
     # ExpertReplayBuffer
     # And reward model! See Usman's other code for implementation...
-    pass
+    #   Actually, don't think I need to? Reward model in replay buffer handles this.
+    def __init__(
+        self,
+        policy: Union[str, Type[DQNPolicy]],
+        env: Union[GymEnv, str],
+        learning_rate: Union[float, Schedule] = 1e-4,
+        buffer_size: int = 1_000_000,  # 1e6
+        learning_starts: int = 50000,
+        batch_size: int = 32,
+        tau: float = 1.0,
+        gamma: float = 0.99,
+        train_freq: Union[int, Tuple[int, str]] = 4,
+        gradient_steps: int = 1,
+        replay_buffer_class: Optional[ExpertReplayBuffer] = ExpertReplayBuffer,
+        replay_buffer_kwargs: Optional[Dict[str, Any]] = None,
+        optimize_memory_usage: bool = False,
+        target_update_interval: int = 10000,
+        exploration_fraction: float = 0.1,
+        exploration_initial_eps: float = 1.0,
+        exploration_final_eps: float = 0.05,
+        max_grad_norm: float = 10,
+        tensorboard_log: Optional[str] = None,
+        create_eval_env: bool = False,
+        policy_kwargs: Optional[Dict[str, Any]] = None,
+        verbose: int = 0,
+        seed: Optional[int] = None,
+        device: Union[th.device, str] = "auto",
+        _init_setup_model: bool = True,
+    ):
+        super().__init__(
+            policy,
+            env,
+            learning_rate=learning_rate,
+            buffer_size=buffer_size,  # 1e6
+            learning_starts=learning_starts,
+            batch_size=batch_size,
+            tau=tau,
+            gamma=gamma,
+            train_freq=train_freq,
+            gradient_steps=gradient_steps,
+            replay_buffer_class=replay_buffer_class,
+            replay_buffer_kwargs=replay_buffer_kwargs,
+            optimize_memory_usage=optimize_memory_usage,
+            target_update_interval=target_update_interval,
+            exploration_fraction=exploration_fraction,
+            exploration_initial_eps=exploration_initial_eps,
+            exploration_final_eps=exploration_final_eps,
+            max_grad_norm=max_grad_norm,
+            tensorboard_log=tensorboard_log,
+            create_eval_env=create_eval_env,
+            policy_kwargs=policy_kwargs,
+            verbose=verbose,
+            seed=seed,
+            device=device,
+            _init_setup_model=_init_setup_model
+        )
+        self.extras = {}  # TODO: remove all extras if unnecessary?
 
+    def train(self, gradient_steps: int, batch_size: int = 100) -> None:
+        # Switch to train mode (this affects batch norm / dropout)
+        self.policy.set_training_mode(True)
+        # Update learning rate according to schedule
+        self._update_learning_rate(self.policy.optimizer)
 
-class ExpertReplayBuffer(ReplayBufferWithRM):
-    # Get obs, next obs, 3x next obs, expert action...
-    # What else?
-    pass
+        losses = []
+        for _ in range(gradient_steps):
+            # Sample replay buffer
+            replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)
+
+            with th.no_grad():
+                # Compute the next Q-values using the target network
+                next_q_values = self.q_net_target(replay_data.next_observations)
+                # Follow greedy policy: use the one with the highest value
+                next_q_values, _ = next_q_values.max(dim=1)
+                # Avoid potential broadcast issue
+                next_q_values = next_q_values.reshape(-1, 1)
+                # 1-step TD target
+                target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_values
+
+            # Get current Q-values estimates
+            current_q_values = self.q_net(replay_data.observations)
+
+            # Compute the expert margin loss if applicable
+            loss = large_margin_loss(current_q_values, replay_data.actions, expert_inds=replay_data.expert_indices, device=self.device)
+
+            # Retrieve the q-values for the actions from the replay buffer
+            current_q_values = th.gather(current_q_values, dim=1, index=replay_data.actions.long())
+
+            # Compute Huber loss (less sensitive to outliers)
+            loss = F.smooth_l1_loss(current_q_values, target_q_values)
+            losses.append(loss.item())
+
+            # Optimize the policy
+            self.policy.optimizer.zero_grad()
+            loss.backward()
+            # Clip gradient norm
+            th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+            self.policy.optimizer.step()
+
+        # Increase update counter
+        self._n_updates += gradient_steps
+
+        self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
+        self.logger.record("train/loss", np.mean(losses))
 
 
 class DuelingQNetwork(QNetwork):
@@ -156,3 +398,4 @@ class DuelingDQNPolicy(CnnPolicy):
         net_args = self.get_net_args()
         net_args = self._update_features_extractor(net_args, features_extractor=None)
         return DuelingQNetwork(**net_args)
+

@@ -5,7 +5,7 @@ import torch as th
 from torch.utils.data.dataset import random_split
 from torch.utils.data.dataloader import DataLoader
 
-from stable_baselines3.dqn import DQN
+from stungle_bungle3.dqn import DQN
 from sacred import Experiment, observers
 
 from dqfp import train_policy, test_policy
@@ -24,7 +24,7 @@ def config():
     policy_kwargs = {"adv_net_arch": [],
                      "val_net_arch": []}
 
-    device = "cuda"
+    device = "cuda:0"
     dataloader_kwargs = {"num_workers": 1, "pin_memory": True}
 
     scheduler_gamma = 1.0

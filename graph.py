@@ -2,7 +2,7 @@ import json
 
 import matplotlib.pyplot as plt
 
-run = 63
+run = 64
 
 with open(f"results/dqfp/{run}/metrics.json") as f:
     data = json.load(f)
@@ -39,4 +39,5 @@ host.legend(handles=lns, loc='best')
 
 par.yaxis.label.set_color(p3.get_color())
 
+plt.title("Losses and returns over the course of training DQfD with only imitation on Enduro.")
 plt.savefig(f"record/{run}.png", bbox_inches='tight')

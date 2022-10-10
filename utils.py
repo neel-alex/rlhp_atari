@@ -1,11 +1,11 @@
 import torch as th
 from torch import nn
 from torch.utils.data.dataset import Dataset
-from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.atari_wrappers import AtariWrapper
-from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
-from stable_baselines3.common.torch_layers import create_mlp
-from stable_baselines3.dqn.policies import QNetwork, CnnPolicy
+from stungle_bungle3.common.env_util import make_vec_env
+from stungle_bungle3.common.atari_wrappers import AtariWrapper
+from stungle_bungle3.common.vec_env import DummyVecEnv, VecFrameStack
+from stungle_bungle3.common.torch_layers import create_mlp
+from stungle_bungle3.dqn.policies import QNetwork, CnnPolicy
 
 
 def make_atari_env(env_id):

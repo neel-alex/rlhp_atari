@@ -3,7 +3,7 @@ torch
 gym[atari]
 gym[accept-rom-license]
 pyglet # for rendering
-ale-py=0.7.4 # tmp fix: until new SB3 version is released
+ale-py==0.7.4 # tmp fix: until new SB3 version is released
 stable_baselines3
 opencv-python
 sacred
@@ -13,3 +13,5 @@ wandb # not a fan but needed for Usman's RLHP...
 scipy
 nvidia-ml-py3 # really not a fan of this, what the heck does this do?
 mujoco-py # just for testing RLHP
+
+git+https://github.com/mrahtz/gym-moving-dot # Hopefully, very easy atari-like testing environment
