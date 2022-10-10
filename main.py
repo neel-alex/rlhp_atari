@@ -15,6 +15,8 @@ dqfp_experiment = Experiment("dqfp")
 observer = observers.FileStorageObserver('results/dqfp')
 dqfp_experiment.observers.append(observer)
 
+import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 @dqfp_experiment.config
 def config():
@@ -32,7 +34,7 @@ def config():
     eps = 1.5625e-4
     weight_decay = 0
 
-    epochs = 800
+    epochs = 400
     batch_size = 32
     th.manual_seed(4)
 

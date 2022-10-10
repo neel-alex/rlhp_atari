@@ -18,9 +18,40 @@ def large_margin_loss(action_qs, target_action, margin=1.0):
     return th.mean(best_qs - expert_qs)
 
 
+def calculate_loss(state, action, rewards, next_states, policy, discount):
+    mse_loss = th.nn.MSELoss()
+    action_qs = policy.q_net(state)
+
+    loss = large_margin_loss(action_qs, action)
+    target_indices = th.reshape(action.to(th.int64), action.shape + (1,))
+    expert_qs = th.gather(action_qs, -1, target_indices)
+
+    # 1-step Q loss
+    one_step_states = next_states[:, 0]
+    one_step_qs, _ = th.max(th.mul(policy.q_net(one_step_states), discount), 1)
+    one_step_targets = rewards[:, 0] + one_step_qs
+    expert_qs = expert_qs.reshape(one_step_targets.shape)
+    loss = loss + mse_loss(expert_qs, one_step_targets)
+
+    return loss
+
+    # n-step Q loss
+    n_step_states = next_states[:, -1]
+    n_step_qs, _ = th.max(th.mul(policy.q_net(n_step_states), discount ** rewards.shape[1]), 1)
+    discounted_rewards = sum([discount ** i * reward for i, reward in enumerate(rewards.T)])
+    n_step_targets = discounted_rewards + n_step_qs
+    loss = loss + mse_loss(expert_qs, n_step_targets)
+
+    # Regularization loss
+    # Not necessary to implement since Pytorch Adam optimizer uses L2 reg
+    #   for weight decay??
+    #   https://pytorch.org/docs/stable/generated/torch.optim.Adam.html
+    return loss
+
+
 def train_policy(model, train_loader, epochs, device="auto", learning_rate=1e-3,
-                 eps=1e-8, weight_decay=0, scheduler_gamma=1.0, experiment=None,
-                 test_interval=10, test_loader=None, eval_interval=10,
+                 discount=0.99, eps=1e-8, weight_decay=0, scheduler_gamma=1.0,
+                 experiment=None,test_interval=10, test_loader=None, eval_interval=10,
                  eval_env=None, save_interval=50, observer=None, verbose=True):
     policy = model.policy.to(device)
 
@@ -28,6 +59,7 @@ def train_policy(model, train_loader, epochs, device="auto", learning_rate=1e-3,
     scheduler = StepLR(optimizer, step_size=1, gamma=scheduler_gamma)
 
     policy.train()
+    # test_interval, eval_interval, save_interval = None, None, None
 
     for epoch in range(epochs):
         if test_interval is not None and epoch % test_interval == 0 and test_loader is not None:
@@ -45,29 +77,9 @@ def train_policy(model, train_loader, epochs, device="auto", learning_rate=1e-3,
             next_states = next_states.to(device)
 
             optimizer.zero_grad()
-            action_qs = policy.q_net(state)
 
-            loss = large_margin_loss(action_qs, action)
-            """
-            # 1-step Q loss
-            one_step_states = next_states[:, 0]
+            loss = calculate_loss(state, action, rewards, next_states, policy, discount)
 
-            one_step_qs, _ = th.max(th.mul(policy.q_net_target(one_step_states), discount), 1)
-            one_step_targets = rewards[:, 0] + one_step_qs
-            loss = loss + criterion(expert_qs, one_step_targets)
-
-            # n-step Q loss
-            n_step_states = next_states[:, -1]
-            n_step_qs, _ = th.max(th.mul(policy.q_net_target(n_step_states), discount ** rewards.shape[1]), 1)
-            discounted_rewards = sum([discount ** i * reward for i, reward in enumerate(rewards.T)])
-            n_step_targets = discounted_rewards + n_step_qs
-            loss = loss + criterion(expert_qs, n_step_targets)
-
-            # Regularization loss
-            # Not necessary to implement since Pytorch Adam optimizer uses L2 reg
-            #   for weight decay??
-            #   https://pytorch.org/docs/stable/generated/torch.optim.Adam.html
-            """
             epoch_loss += loss
             loss.backward()
             optimizer.step()
@@ -86,16 +98,17 @@ def train_policy(model, train_loader, epochs, device="auto", learning_rate=1e-3,
         eval_model(model, eval_env, experiment=experiment, epoch=epochs)
 
 
-def test_policy(policy, test_loader, device="auto", experiment=None, epoch=None, verbose=True):
+def test_policy(policy, test_loader, device="auto", discount=0.99, experiment=None, epoch=None, verbose=True):
     policy.eval()
     test_loss = th.tensor(0.0).to(device)
     with th.no_grad():
-        for state, action, _, _ in test_loader:
+        for state, action, rewards, next_states in test_loader:
             state = state.to(device)
             action = action.to(device)
-            action_qs = policy.q_net(state)
+            rewards = rewards.to(device)
+            next_states = next_states.to(device)
 
-            test_loss += large_margin_loss(action_qs, action)
+            test_loss += calculate_loss(state, action, rewards, next_states, policy, discount)
 
     test_loss /= len(test_loader.dataset)
     if experiment is not None:
