@@ -2,16 +2,14 @@ from gym import spaces
 import numpy as np
 import torch as th
 from torch import nn
-from torch.nn import functional as F
 from stable_baselines3.common.torch_layers import create_mlp
 from stable_baselines3.dqn.policies import QNetwork, CnnPolicy, DQNPolicy
 from stable_baselines3 import DQN
-# from pl.stable_baselines3.common.buffers import ReplayBufferWithRM
 from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.vec_env import VecNormalize
 from stable_baselines3.common.type_aliases import GymEnv, Schedule
 
-from typing import Union, Type, NamedTuple, List, Dict, Tuple, Any, Optional
+from typing import Union, Type, NamedTuple, List, Dict, Tuple, Any, Optional, Callable
 
 
 def large_margin_loss(action_qs, target_action, expert_inds=None, margin=0.8, device='auto'):
@@ -56,12 +54,12 @@ def calculate_loss(replay_data, n_forward, gamma, q_net_target, q_net, device):
     # 1-step TD target
     target_q_values = replay_data.rewards + gamma * next_q_values
     # Compute Huber loss (less sensitive to outliers)
-    loss += F.smooth_l1_loss(current_q_values, target_q_values)
+    # loss += F.smooth_l1_loss(current_q_values, target_q_values)
     if n_forward > 1:
         # n-step TD target
         n_step_target_q_values = replay_data.n_step_rewards.reshape(-1, 1) + \
                                  gamma ** n_forward * n_step_q_values
-        loss += F.smooth_l1_loss(current_q_values, n_step_target_q_values)
+        # loss += F.smooth_l1_loss(current_q_values, n_step_target_q_values)
 
     return loss
 
@@ -218,6 +216,8 @@ class ExpertMarginDQN(DQN):
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
+        log_function: Callable = lambda *a: None,
+        log_interval: int = 10000,
     ):
         replay_buffer_kwargs["discount"] = gamma
         super().__init__(
@@ -250,6 +250,22 @@ class ExpertMarginDQN(DQN):
         self.replay_buffer = self.replay_buffer  # type: Optional[ExpertReplayBuffer]
         self.extras = {}  # TODO: remove all extras if unnecessary?
 
+        self.n_calls = 0
+        self.train_losses = [0]
+        self.log_function = log_function
+        self.log_interval = log_interval
+
+    def log_metrics(self, train_loss):
+        self.train_losses.append(train_loss)
+        if self.n_calls % (self.log_interval // 10) == 0:
+            tls = self.train_losses[-(self.log_interval // 10):]
+            print(f"Training Loss ({self.n_calls}): {sum(tls)/len(tls)}")
+        if self.n_calls % self.log_interval == 0:
+            self.log_function(self, self.train_losses, self.n_calls, self.log_interval)
+            self.train_losses = []
+
+        self.n_calls += 1
+
     def train(self, gradient_steps: int, batch_size: int = 100) -> None:
         # Switch to train mode (this affects batch norm / dropout)
         self.policy.set_training_mode(True)
@@ -272,6 +288,7 @@ class ExpertMarginDQN(DQN):
             # Clip gradient norm
             th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
             self.policy.optimizer.step()
+            self.log_metrics(loss.item())
 
         # Increase update counter
         self._n_updates += gradient_steps
@@ -294,9 +311,9 @@ class DuelingQNetwork(QNetwork):
         )
 
         if adv_net_arch is None:
-            adv_net_arch = [64, 64]
+            adv_net_arch = []
         if val_net_arch is None:
-            val_net_arch = [64, 64]
+            val_net_arch = []
 
         self.adv_net_arch, self.val_net_arch = adv_net_arch, val_net_arch
         action_dim = self.action_space.n  # number of actions
