@@ -81,10 +81,10 @@ class ExpertReplayBuffer(ReplayBuffer):
         buffer_size: int,
         observation_space: spaces.Space,
         action_space: spaces.Space,
-        expert_observations: np.ndarray,
-        expert_actions: np.ndarray,
-        expert_rewards: np.ndarray,
-        expert_dones: np.ndarray,
+        expert_observations: Optional[np.ndarray] = None,
+        expert_actions: Optional[np.ndarray] = None,
+        expert_rewards: Optional[np.ndarray] = None,
+        expert_dones: Optional[np.ndarray] = None,
         device: Union[th.device, str] = "auto",
         n_envs: int = 1,
         n_forward: int = 3,
@@ -203,7 +203,7 @@ class ExpertMarginDQN(DQN):
         gradient_steps: int = 1,
         replay_buffer_class: Optional[ExpertReplayBuffer] = ExpertReplayBuffer,
         replay_buffer_kwargs: Optional[Dict[str, Any]] = None,
-        optimize_memory_usage: bool = False,
+        optimize_memory_usage: bool = True,
         target_update_interval: int = 10000,
         exploration_fraction: float = 0.1,
         exploration_initial_eps: float = 1.0,
@@ -219,7 +219,9 @@ class ExpertMarginDQN(DQN):
         log_function: Callable = lambda *a: None,
         log_interval: int = 10000,
     ):
-        replay_buffer_kwargs["discount"] = gamma
+
+        if replay_buffer_kwargs:
+            replay_buffer_kwargs["discount"] = gamma
         super().__init__(
             policy,
             env,
@@ -251,7 +253,7 @@ class ExpertMarginDQN(DQN):
         self.extras = {}  # TODO: remove all extras if unnecessary?
 
         self.n_calls = 0
-        self.train_losses = [0]
+        self.train_losses = []
         self.log_function = log_function
         self.log_interval = log_interval
 

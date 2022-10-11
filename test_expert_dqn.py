@@ -63,7 +63,7 @@ def make_logger(env):
     def log(model, train_losses, n_batches, log_interval):
         eval_model(model, env, experiment=edqn_experiment, step=n_batches)
         edqn_experiment.log_scalar('train.loss', sum(train_losses)/len(train_losses), step=n_batches)
-        if n_batches % (log_interval * 10) == 0:
+        if n_batches % (log_interval * 5) == 0:
             model.policy.save(observer.dir + f"/{n_batches}_batches_policy.ckpt")
 
     return log
@@ -73,6 +73,7 @@ def make_logger(env):
 def main(mini, env_id, discount, learning_starts, exploration_fraction, batch_size, device, seed, verbose):
     env = make_atari_env(env_id)
     eval_env = make_atari_env(env_id)
+    eval_env.seed(seed)
     log_function = make_logger(eval_env)
 
     data = np.load(f"record/{env_id}_expert_data{'_mini' if mini else ''}.npz")
