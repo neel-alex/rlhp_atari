@@ -1,7 +1,5 @@
-import numpy as np
-
-from utils import make_atari_env
-from dqn_utils import ExpertMarginDQN, DuelingDQNPolicy, ExpertReplayBuffer, calculate_loss, large_margin_loss
+from utils.env_utils import make_atari_env
+from utils.dqn_utils import ExpertMarginDQN, DuelingDQNPolicy
 
 
 def eval_episode(m, e):

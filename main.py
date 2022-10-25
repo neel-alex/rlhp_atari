@@ -1,71 +1,76 @@
-# Test re-upload
+import os
 
 import numpy as np
-import torch as th
-from torch.utils.data.dataset import random_split
-from torch.utils.data.dataloader import DataLoader
-
-from stable_baselines3.dqn import DQN
 from sacred import Experiment, observers
 
-from dqfp import train_policy, test_policy
-from utils import make_atari_env, ExpertDataSet, DuelingDQNPolicy
+from utils.env_utils import make_atari_env
+from utils.dqn_utils import ExpertMarginDQN, DuelingDQNPolicy, BorjaReplayBuffer
 
-dqfp_experiment = Experiment("dqfp")
-observer = observers.FileStorageObserver('results/dqfp')
-dqfp_experiment.observers.append(observer)
+edqn_experiment = Experiment("edqn")
+observer = observers.FileStorageObserver('results/edqn')
+edqn_experiment.observers.append(observer)
 
-import os
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-@dqfp_experiment.config
+
+@edqn_experiment.config
 def config():
-    env_id = "EnduroNoFrameskip-v4"
     mini = False
-    policy_cls = DuelingDQNPolicy
-    policy_kwargs = {"adv_net_arch": [],
-                     "val_net_arch": []}
+    env_id = "EnduroNoFrameskip-v4"
+    discount = 0.99
+    learning_starts = 0
+    exploration_fraction = 0.1
+    buffer_size = 0
 
-    device = "cuda"
-    dataloader_kwargs = {"num_workers": 1, "pin_memory": True}
-
+    batch_size = 32
     scheduler_gamma = 1.0
     learning_rate = 6.25e-5
     eps = 1.5625e-4
     weight_decay = 0
 
-    epochs = 400
-    batch_size = 32
-    th.manual_seed(4)
+    seed = 4  # chosen by fair dice roll. guaranteed to be random.
+
+    verbose = 1
+    device = "cuda"
 
 
-@dqfp_experiment.automain
-def main(env_id, mini, policy_cls, policy_kwargs, device, dataloader_kwargs,
-         scheduler_gamma, learning_rate, eps, weight_decay, epochs, batch_size):
+@edqn_experiment.automain
+def main(mini, env_id, discount, learning_starts, buffer_size, exploration_fraction, batch_size, device, seed, verbose):
     env = make_atari_env(env_id)
-    model = DQN(policy_cls, env, verbose=1, policy_kwargs=policy_kwargs)
+    eval_env = make_atari_env(env_id)
+    eval_env.seed(seed)
+
     data = np.load(f"record/{env_id}_expert_data{'_mini' if mini else ''}.npz")
-    dataset = ExpertDataSet(data['states'],
-                            data['actions'],
-                            data['rewards'],
-                            data['dones'],
-                            next_steps=3)
+    print(f"Loaded {len(data['actions'])} transitions.")
 
-    print(f"Loaded {len(dataset)} transitions.")
+    model = ExpertMarginDQN(DuelingDQNPolicy,
+                            env,
+                            buffer_size=buffer_size,
+                            gamma=discount,
+                            learning_starts=learning_starts,
+                            batch_size=batch_size,
+                            replay_buffer_class=BorjaReplayBuffer,
+                            replay_buffer_kwargs={
+                                "expert_observations": data['states'],
+                                "expert_actions": data['actions'],
+                                "expert_rewards": data['rewards'],
+                                "expert_dones": data['dones'],
+                                "n_forward": 3,
+                               },
+                            exploration_fraction=exploration_fraction,
+                            device=device,
+                            optimize_memory_usage=True,
+                            seed=seed,
+                            verbose=verbose,
+                            log_function=log_function,
+                            )
 
-    train_size = int(0.8 * len(dataset))
-    split = train_size, len(dataset) - train_size
-    train_dataset, test_dataset = random_split(dataset, split)
+    # model.learn(2e6)
+    # model._setup_learn(1, None)
+    # for i in range(500_001):
+    #     model.train(1, 32)
+    #     if i % 2500 == 0:
+    #         polyak_update(model.q_net.parameters(), model.q_net_target.parameters(), model.tau)
 
-    train_loader = DataLoader(dataset=train_dataset,
-                              batch_size=batch_size, shuffle=True, **dataloader_kwargs)
-    test_loader = DataLoader(dataset=test_dataset,
-                             batch_size=batch_size, shuffle=True, **dataloader_kwargs)
-
-    train_policy(model, train_loader, epochs, device=device, learning_rate=learning_rate,
-                 eps=eps, weight_decay=weight_decay, scheduler_gamma=scheduler_gamma,
-                 experiment=dqfp_experiment, test_loader=test_loader, eval_env=env, observer=observer)
-    print(observer.dir)
-
-    model.save(observer.dir + "/policy")
-
+    model.save(observer.dir + f"/final_model.ckpt")
+    print("Test")

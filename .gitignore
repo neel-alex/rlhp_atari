@@ -6,4 +6,3 @@ __pycache__
 *.idea
 *.npz
 *.mp4
-nohup.out
