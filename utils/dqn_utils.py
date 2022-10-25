@@ -1,14 +1,16 @@
+from typing import Union, Type, Dict, Tuple, Any, Optional
+
 import numpy as np
 import torch as th
 from torch import nn
 from torch.nn import functional as F
-from stable_baselines3.common.torch_layers import create_mlp
-from stable_baselines3.dqn.policies import QNetwork, CnnPolicy, DQNPolicy
 from stable_baselines3 import DQN
+from stable_baselines3.dqn.policies import QNetwork, CnnPolicy, DQNPolicy
+from stable_baselines3.common.torch_layers import create_mlp
 from stable_baselines3.common.type_aliases import GymEnv, Schedule
+from stable_baselines3.common.buffers import ReplayBuffer
 
-from typing import Union, Type, Dict, Tuple, Any, Optional, Callable
-from buffer_utils import ExpertReplayBuffer
+from utils.buffer_utils import ExpertReplayBuffer
 
 
 def large_margin_loss(action_qs, target_action, expert_inds=None, margin=0.8, device='auto'):
@@ -53,7 +55,6 @@ def calculate_loss(replay_data, n_forward, gamma, q_net_target, q_net, device):
     target_q_values = replay_data.rewards + gamma * next_q_values
     # Compute Huber loss (less sensitive to outliers)
     loss += F.smooth_l1_loss(current_q_values, target_q_values)
-    # loss = F.smooth_l1_loss(current_q_values, target_q_values)
 
     if n_forward > 1:
         # n-step TD target
@@ -64,7 +65,7 @@ def calculate_loss(replay_data, n_forward, gamma, q_net_target, q_net, device):
     return loss
 
 
-class ExpertMarginDQN(DQN):
+class ExpertDQN(DQN):
     # Use margin loss + n_step q loss...
     # ExpertReplayBuffer
     # And reward model! See Usman's other code for implementation...
@@ -81,7 +82,7 @@ class ExpertMarginDQN(DQN):
         gamma: float = 0.99,
         train_freq: Union[int, Tuple[int, str]] = 4,
         gradient_steps: int = 1,
-        replay_buffer_class: Optional[ExpertReplayBuffer] = ExpertReplayBuffer,
+        replay_buffer_class: Optional[Type[ReplayBuffer]] = Type[ExpertReplayBuffer],
         replay_buffer_kwargs: Optional[Dict[str, Any]] = None,
         optimize_memory_usage: bool = True,
         target_update_interval: int = 10000,
@@ -96,8 +97,6 @@ class ExpertMarginDQN(DQN):
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
-        log_function: Callable = lambda *a: None,
-        log_interval: int = 10000,
     ):
 
         if replay_buffer_kwargs:
@@ -134,8 +133,6 @@ class ExpertMarginDQN(DQN):
 
         self.n_calls = 0
         self.train_losses = []
-        self.log_function = log_function
-        self.log_interval = log_interval
 
     def train(self, gradient_steps: int, batch_size: int = 100) -> None:
         # Switch to train mode (this affects batch norm / dropout)

@@ -26,11 +26,11 @@ class ExpertReplayBuffer(ReplayBuffer):
         buffer_size: int,
         observation_space: spaces.Space,
         action_space: spaces.Space,
+        device: Union[th.device, str] = "auto",
         expert_observations: Optional[np.ndarray] = None,
         expert_actions: Optional[np.ndarray] = None,
         expert_rewards: Optional[np.ndarray] = None,
         expert_dones: Optional[np.ndarray] = None,
-        device: Union[th.device, str] = "auto",
         n_envs: int = 1,
         n_forward: int = 3,
         optimize_memory_usage: bool = True,
@@ -67,7 +67,7 @@ class ExpertReplayBuffer(ReplayBuffer):
 
         self.dones[self.num_expert - 1] = 1  # TODO: is this fixable?
 
-        self.pos = self.num_expert
+        self.pos = self.num_expert  # TODO: known bug, errors if buffer size is 0
         self.n_forward = n_forward
         self.discount = discount
 
@@ -135,11 +135,11 @@ class BorjaReplayBuffer(ExpertReplayBuffer):
         buffer_size: int,
         observation_space: spaces.Space,
         action_space: spaces.Space,
+        device: Union[th.device, str] = "auto",
         expert_observations: Optional[np.ndarray] = None,
         expert_actions: Optional[np.ndarray] = None,
         expert_rewards: Optional[np.ndarray] = None,
         expert_dones: Optional[np.ndarray] = None,
-        device: Union[th.device, str] = "auto",
         n_envs: int = 1,
         n_forward: int = 3,
         optimize_memory_usage: bool = True,
@@ -178,7 +178,8 @@ class BorjaReplayBuffer(ExpertReplayBuffer):
             done: np.ndarray,
             infos: List[Dict[str, Any]]) -> None:
         s = reward.shape
-        reward = self.dummy_reward_net(th.tensor(obs).to(self.device).float() / 255.0)
+        with th.no_grad():
+            reward = self.dummy_reward_net(th.tensor(obs).to(self.device).float() / 255.0)
         reward = reward.to('cpu').numpy().reshape(s)
         super().add(obs, next_obs, action, reward, done, infos)
 

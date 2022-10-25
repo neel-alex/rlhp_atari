@@ -1,5 +1,5 @@
 from utils.env_utils import make_atari_env
-from utils.dqn_utils import ExpertMarginDQN, DuelingDQNPolicy
+from utils.dqn_utils import ExpertDQN, DuelingDQNPolicy
 
 
 def eval_episode(m, e):
@@ -28,16 +28,16 @@ model_path = f"results/edqn/{run_number}/final_policy.ckpt"
 
 env = make_atari_env("EnduroNoFrameskip-v4")
 env.seed(4)
-model = ExpertMarginDQN(DuelingDQNPolicy,
-                        env,
-                        gamma=0.99,
-                        learning_starts=0,
-                        batch_size=128,
-                        device='cuda',
-                        seed=4,
-                        verbose=1,
-                        log_function=lambda *x: print('log')
-                        )
+model = ExpertDQN(DuelingDQNPolicy,
+                  env,
+                  gamma=0.99,
+                  learning_starts=0,
+                  batch_size=128,
+                  device='cuda',
+                  seed=4,
+                  verbose=1,
+                  log_function=lambda *x: print('log')
+                  )
 
 # policy = model.policy
 policy = DuelingDQNPolicy.load(model_path)
