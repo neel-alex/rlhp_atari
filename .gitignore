@@ -1,7 +1,9 @@
 results
 record/rl-baselines3-zoo
 record/*.png
+wandb
 __pycache__
 *.idea
 *.npz
 *.mp4
+nohup.out

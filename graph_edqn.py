@@ -2,7 +2,7 @@ import json
 
 import matplotlib.pyplot as plt
 
-run = 57
+run = 81
 
 with open(f"results/edqn/{run}/metrics.json") as f:
     data = json.load(f)
@@ -16,6 +16,8 @@ eval_reward = data['test.return']['values']
 print(average(eval_reward[-5:]))
 eval_steps = data['test.return']['steps']
 
+print(eval_reward)
+
 if train_loss[0] < train_loss[1]:
     train_loss[0] = train_loss[0] * 2
 
@@ -23,8 +25,8 @@ fig, host = plt.subplots(figsize=(8, 5))
 par = host.twinx()
 
 host.set_xlim(min(train_steps), max(train_steps) + 1)
-host.set_ylim(0, 1)
-par.set_ylim(0, 400)
+host.set_ylim(0, 1.2)
+par.set_ylim(0, 150)
 host.xaxis.get_major_locator().set_params(integer=True)  # Only integer epochs
 
 host.set_xlabel("Gradient Steps")

@@ -2,6 +2,7 @@ from gym import spaces
 import numpy as np
 import torch as th
 from torch import nn
+from torch.nn import functional as F
 from stable_baselines3.common.torch_layers import create_mlp
 from stable_baselines3.dqn.policies import QNetwork, CnnPolicy, DQNPolicy
 from stable_baselines3 import DQN
@@ -54,12 +55,14 @@ def calculate_loss(replay_data, n_forward, gamma, q_net_target, q_net, device):
     # 1-step TD target
     target_q_values = replay_data.rewards + gamma * next_q_values
     # Compute Huber loss (less sensitive to outliers)
-    # loss += F.smooth_l1_loss(current_q_values, target_q_values)
+    loss += F.smooth_l1_loss(current_q_values, target_q_values)
+    # loss = F.smooth_l1_loss(current_q_values, target_q_values)
+
     if n_forward > 1:
         # n-step TD target
         n_step_target_q_values = replay_data.n_step_rewards.reshape(-1, 1) + \
                                  gamma ** n_forward * n_step_q_values
-        # loss += F.smooth_l1_loss(current_q_values, n_step_target_q_values)
+        loss += F.smooth_l1_loss(current_q_values, n_step_target_q_values)
 
     return loss
 
@@ -184,6 +187,60 @@ class ExpertReplayBuffer(ReplayBuffer):
         return ExpertReplayBufferSamples(*r)
 
 
+class BorjaReplayBuffer(ExpertReplayBuffer):
+    def __init__(
+        self,
+        buffer_size: int,
+        observation_space: spaces.Space,
+        action_space: spaces.Space,
+        expert_observations: Optional[np.ndarray] = None,
+        expert_actions: Optional[np.ndarray] = None,
+        expert_rewards: Optional[np.ndarray] = None,
+        expert_dones: Optional[np.ndarray] = None,
+        device: Union[th.device, str] = "auto",
+        n_envs: int = 1,
+        n_forward: int = 3,
+        optimize_memory_usage: bool = True,
+        discount: float = 0.99,
+    ):
+        super().__init__(
+            buffer_size=buffer_size,
+            observation_space=observation_space,
+            action_space=action_space,
+            expert_observations=expert_observations,
+            expert_actions=expert_actions,
+            expert_rewards=expert_rewards,
+            expert_dones=expert_dones,
+            device=device,
+            n_envs=n_envs,
+            n_forward=n_forward,
+            optimize_memory_usage=optimize_memory_usage,
+            discount=discount,
+        )
+        self.dummy_reward_net = BorjaCNN(self.observation_space.shape, 1)
+        if th.device(self.device) == th.device('cuda'):
+            self.dummy_reward_net.cuda()
+            print("Creating reward net on GPU")
+
+        SPLIT_SIZE = 200
+        for i, observation_batch in enumerate(np.split(np.squeeze(self.observations), SPLIT_SIZE)):
+            with th.no_grad():
+                reward = self.dummy_reward_net(th.tensor(observation_batch).to(self.device).float() / 255.0)
+                self.rewards[i*len(observation_batch):(i+1)*len(observation_batch),] = reward.to('cpu')
+
+    def add(self,
+            obs: np.ndarray,
+            next_obs: np.ndarray,
+            action: np.ndarray,
+            reward: np.ndarray,
+            done: np.ndarray,
+            infos: List[Dict[str, Any]]) -> None:
+        s = reward.shape
+        reward = self.dummy_reward_net(th.tensor(obs).to(self.device).float() / 255.0)
+        reward = reward.to('cpu').numpy().reshape(s)
+        super().add(obs, next_obs, action, reward, done, infos)
+
+
 class ExpertMarginDQN(DQN):
     # Use margin loss + n_step q loss...
     # ExpertReplayBuffer
@@ -261,7 +318,7 @@ class ExpertMarginDQN(DQN):
         self.train_losses.append(train_loss)
         if self.n_calls % (self.log_interval // 10) == 0:
             tls = self.train_losses[-(self.log_interval // 10):]
-            print(f"Training Loss ({self.n_calls}): {sum(tls)/len(tls)}")
+            print(f"Training Loss ({self.n_calls}): {sum(tls) / len(tls)}")
         if self.n_calls % self.log_interval == 0:
             self.log_function(self, self.train_losses, self.n_calls, self.log_interval)
             self.train_losses = []
@@ -313,9 +370,9 @@ class DuelingQNetwork(QNetwork):
         )
 
         if adv_net_arch is None:
-            adv_net_arch = []
+            adv_net_arch = [64, 64]
         if val_net_arch is None:
-            val_net_arch = []
+            val_net_arch = [64, 64]
 
         self.adv_net_arch, self.val_net_arch = adv_net_arch, val_net_arch
         action_dim = self.action_space.n  # number of actions
@@ -385,3 +442,35 @@ def eval_episode(model, env):
                 obs = env.reset()
                 done = False
     return reward
+
+
+class BorjaCNN(nn.Module):
+    # from https://github.com/uzman-anwar/preference-learning/blob/master/rlhp/utils/reward_nets.py
+    def __init__(self, input_shape, features_dim):
+        super().__init__()
+        n_input_channels = input_shape[0]
+        self.cnn = nn.Sequential(
+            nn.Conv2d(n_input_channels, 16, kernel_size=7, stride=3, padding=0),
+            nn.BatchNorm2d(16),
+            nn.Dropout2d(p=0.2),
+            nn.LeakyReLU(),
+            nn.Conv2d(16, 16, kernel_size=5, stride=2, padding=0),
+            nn.BatchNorm2d(16),
+            nn.Dropout2d(p=0.2),
+            nn.LeakyReLU(),
+            nn.Conv2d(16, 16, kernel_size=3, stride=1, padding=0),
+            nn.BatchNorm2d(16),
+            nn.Dropout2d(p=0.2),
+            nn.LeakyReLU(),
+            nn.Conv2d(16, 16, kernel_size=3, stride=1, padding=0),
+            nn.BatchNorm2d(16),
+            nn.Dropout2d(p=0.2),
+            nn.LeakyReLU(),
+            nn.Flatten(),
+        )
+        with th.no_grad():
+            x = th.rand(input_shape)
+            n_flatten = self.cnn(th.as_tensor(x[None]).float()).shape[1]
+        self.linear = nn.Linear(n_flatten, features_dim)
+    def forward(self, x):
+        return self.linear(self.cnn(x))
